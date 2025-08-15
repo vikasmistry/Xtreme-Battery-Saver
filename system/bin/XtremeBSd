@@ -86,12 +86,31 @@ is_device() {
 }
 
 
+# Send a system notification if notify is enabled in config
+# Usage: notif "Your message here" ["Title"] ["Tag"]
 notif() {
-  # dont notify if notify=false
-  if [ "$(getconf notify true)" = "true" ]; then
-    su -lp 2000 -c "cmd notification post -S bigtext -t 'XtremeBS' 'STATUS' \"$1\"" >/dev/null
-  fi
+    local message="$1"
+    local title="${2:-XtremeBS}"
+    local tag="${3:-STATUS}"
+
+    # Check notifications setting in config (defaults to true)
+    if [ "$(getconf notify true)" != "true" ]; then
+        return 0
+    fi
+
+    # Input validation: must have a message
+    if [ -z "$message" ]; then
+        echo "ERROR: notif requires a message" >&2
+        return 1
+    fi
+
+    # Compose and send the notification
+    su -lp 2000 -c \
+        "cmd notification post -S bigtext -t '$title' '$tag' \"$(echo "$message" | sed 's/\"/\\\"/g')\"" 2>/dev/null
+
+    # Optional: check if it succeeded (unfortunately cmd notification returns 0 regardless)
 }
+
 
 log_msg() {
   case $1 in
