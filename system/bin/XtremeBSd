@@ -44,18 +44,47 @@ getconf() {
 }
 
 
+# Check if device is in a particular state (charging, screen, low_power)
+# Usage: is_device <state>
+# Supported states: charging, screen, low_power
 is_device() {
-  # is device charging|screen|low_power
-  if [ "$1" != "low_power" ]; then
-    dumpsys deviceidle get $1
-  else
-    if [ $(settings get global low_power) = 1 ]; then
-      echo true
-    else
-      echo false
+    local state="$1"
+    local result=""
+    
+    # Validate input
+    if [ -z "$state" ]; then
+        echo "ERROR: is_device requires a state argument (charging, screen, low_power)" >&2
+        return 1
     fi
-  fi
+
+    case "$state" in
+        charging|screen)
+            # Use dumpsys to check standard device idle states
+            result=$(dumpsys deviceidle get "$state" 2>/dev/null | tr -d '\r\n')
+            # Convert output to simple true/false if possible
+            if [ "$result" = "true" ] || [ "$result" = "1" ] || [ "$result" = "active" ]; then
+                echo "true"
+            else
+                echo "false"
+            fi
+            ;;
+        low_power)
+            # Use settings for battery saver (low power) status
+            local low_power_value
+            low_power_value=$(settings get global low_power 2>/dev/null)
+            if [ "$low_power_value" = "1" ]; then
+                echo "true"
+            else
+                echo "false"
+            fi
+            ;;
+        *)
+            echo "ERROR: Unsupported state '$state'. Use charging, screen, or low_power." >&2
+            return 2
+            ;;
+    esac
 }
+
 
 notif() {
   # dont notify if notify=false
