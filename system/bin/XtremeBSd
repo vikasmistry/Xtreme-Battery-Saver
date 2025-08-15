@@ -148,83 +148,81 @@ log_msg() {
 }
 
 
+# Migrate a v1 config to v2 event-driven format for XtremeBS
 migrate() {
-  log_msg 2 "It looks like version=2 was found in the config without a valid event block"
-  log_msg 1 "Migrating to v2 config"
-  # start with base conf values
-  # delay, version, log_file, log_level
-  echo "version=2" > "$conf-v2"
-  ctl_file=$(getconf ctl_file "")
-  if [ ! -z "$ctl_file" ]; then
-    echo "ctl_file=$ctl_file" "$conf-v2"
-  fi
-  delay="$(getconf delay 3)"
-  echo "delay=$delay" >> "$conf-v2"
-  log_file="$(getconf log_file "$(dirname "$conf")/XtremeBS.log")"
-  echo "log_file=$log_file" >> "$conf-v2"
-  log_level="$(getconf log_level 1)"
-  echo "log_level=$log_level" >> "$conf-v2"
-  # newline for clarity
-  echo >> "$conf-v2"
+    log_msg 2 "version=2 was found in the config without a valid event block"
+    log_msg 1 "Migrating XtremeBS config to v2 event-driven format"
 
-  # start with figuring out the trigger,
-  # then write values over.
-  event_blocks=("charging" "screen_off")
-  # events:
-  # charging, screen_off, boot,
-  # manual, low_power
-  trigger="$(getconf trigger auto)"
-  case "$trigger" in
-    auto)
-      event_blocks+=("manual" "boot")
-      # start event block
-      echo "low_power={" >> "$conf-v2"
-      # keep_on_charge can be used if
-      # you want the settings to persist
-      # when the device is plugged in
-      echo "keep_on_charge=$(getconf keep_on_charge true)" >> "$conf-v2"
-      ;;
-    boot)
-      event_blocks+=("low_power" "manual")
-      echo "boot={" >> "$conf-v2"
-      # quit is a new option that can only
-      # be used in a boot block. it exits the daemon
-      # after making changes to keep CPU cycles to a minimum
-      echo "quit=false" >> "$conf-v2"
-      ;;
-    manual)
-      event_blocks+=("boot" "low_power")
-      echo "on_start={" >> "$conf-v2"
-      ;;
-  esac
+    local new_conf="${conf}-v2"
+    local backup_conf="${conf}-v1"
+    local trigger event_blocks block_header
 
-  # copy values over
-  echo "handle_cores=$(getconf handle_cores false)" >> "$conf-v2"
-  echo "disable_cores=$(getconf disable_cores false)" >> "$conf-v2"
-  echo "handle_apps=$(getconf handle_apps false)" >> "$conf-v2"
-  echo "allowlist=$(getconf allowlist /sdcard/XtremeBS/apps.allow)" >> "$conf-v2"
-  echo "denylist=$(getconf denylist /sdcard/XtremeBS/apps.deny)" >> "$conf-v2"
-  echo "handle_gms=$(getconf handle_gms false)" >> "$conf-v2"
-  echo "handle_proc=$(getconf handle_proc false)" >> "$conf-v2"
-  echo "proc_file=$(getconf proc_file /sdcard/XtremeBS/proc.list)" >> "$conf-v2"
-  echo "low_ram=$(getconf low_ram false)" >> "$conf-v2"
-  echo "doze=$(getconf doze false)" >> "$conf-v2"
-  echo "kill_wifi=$(getconf kill_wifi false)" >> "$conf-v2"
-  echo "}" >> "$conf-v2"
-  echo >> "$conf-v2"
+    # Start writing v2 config
+    {
+        echo "version=2"
 
-  # write remaining event blocks
-  for event in ${event_blocks[@]}; do
-    echo -e "$event={\n}\n" >> "$conf-v2"
-  done
+        local ctl_file delay log_file log_level
+        ctl_file="$(getconf ctl_file '')"
+        [ -n "$ctl_file" ] && echo "ctl_file=$ctl_file"
+        delay="$(getconf delay 3)"
+        echo "delay=$delay"
+        log_file="$(getconf log_file "$(dirname "$conf")/XtremeBS.log")"
+        echo "log_file=$log_file"
+        log_level="$(getconf log_level 1)"
+        echo "log_level=$log_level"
+        echo
+    } > "$new_conf" || { log_msg 1 "ERROR: Could not write new config!"; return 1; }
 
-  # remove the version string and make backup
-  sed -i '/^version=2/d' "$conf" # remove v2
-  mv "$conf" "$conf-v1"
-  # make new conf take effect
-  mv "$conf-v2" "$conf"
-  log_msg 1 "Migration complete!"
+    # Build event_blocks and write main event block
+    trigger="$(getconf trigger auto)"
+    event_blocks=("charging" "screen_off")
+
+    case "$trigger" in
+        auto)
+            event_blocks+=("manual" "boot")
+            block_header="low_power"
+            ;;
+        boot)
+            event_blocks+=("low_power" "manual")
+            block_header="boot"
+            ;;
+        manual)
+            event_blocks+=("boot" "low_power")
+            block_header="on_start"
+            ;;
+        *)
+            block_header="custom"
+            ;;
+    esac
+
+    {
+        echo "$block_header={"
+        [ "$trigger" = "auto" ] && \
+            echo "keep_on_charge=$(getconf keep_on_charge true)"
+        [ "$trigger" = "boot" ] && \
+            echo "quit=false"
+
+        # Replicate all relevant settings into the active event block
+        for key in handle_cores disable_cores handle_apps allowlist denylist \
+                   handle_gms handle_proc proc_file low_ram doze kill_wifi; do
+            echo "$key=$(getconf $key)"
+        done
+        echo "}"
+        echo
+    } >> "$new_conf"
+
+    # Add empty event blocks
+    for event in "${event_blocks[@]}"; do
+        echo -e "$event={\n}" >> "$new_conf"
+    done
+
+    # Backup old, remove version=2 if present, put new in place
+    sed -i '/^version=2/d' "$conf"
+    mv -f -- "$conf" "$backup_conf"
+    mv -f -- "$new_conf" "$conf"
+    log_msg 1 "Migration complete! v1 config was saved as '$backup_conf'."
 }
+
 
 auto_map_cores() {
   log_msg 2 "Auto-mapping CPU cores"
