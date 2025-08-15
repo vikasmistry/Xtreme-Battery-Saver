@@ -594,131 +594,133 @@ enable_pwr_save() {
 }
 
 
+# Disable all configured power saving features and restore defaults
 disable_pwr_save() {
-  if [ "$version" != "2" ]; then
-    echo -n "Disabling XtremeBS"
-    notif "Disabling XtremeBS..."
-    log_msg 1 "Disabling XtremeBS"
-  fi
-  # Handle Cores
-
-  if [ "$handle_cores" != "false" ] || [ "$disable_cores" != "false" ]; then
-    if [ -d "/data/adb/modules" ]; then
-      # magisk mount read-write
-      magic_remount_rw &>/dev/null
+    if [ "$version" != "2" ]; then
+        echo -n "Disabling XtremeBS"
+        notif "Disabling XtremeBS..."
+        log_msg 1 "Disabling XtremeBS"
     fi
-    if [ "$disable_cores" = "auto" ]; then
-      for cpu in ${hp_cpus[@]}; do
-        log_msg 3 "Enabling $cpu"
-        echo "1" > "$cpu_base_path/$cpu/online"
-      done
-    else
-      # the user manually set it
-      for cpu in $disable_cores; do
-        if [ -d "$cpu_base_path/$cpu/" ]; then
-          log_msg 3 "Enabling $cpu"
-          echo "1" > "$cpu_base_path/$cpu/online"
+
+    # Handle cores: re-enable or reset governors
+    if [ "$handle_cores" != "false" ] || [ "$disable_cores" != "false" ]; then
+        if [ -d "/data/adb/modules" ]; then
+            magic_remount_rw &>/dev/null
         fi
-      done
-    fi
-    if [ "$handle_cores" = "auto" ]; then
-      for index in ${!lp_cpus[@]}; do
-        # TBH, i have no fucking clue
-        # what i did here but its
-        # magical and it works
-        # so, i will just leave it.
-        log_msg 3 "Resetting ${lp_cpus[$index]}"
-        echo "${lp_govs[$index]}" > "$cpu_base_path/${lp_cpus[$index]}/cpufreq/scaling_governor"
-      done
-    else
-      # the user manually set it
-      for cpu in $handle_cores; do
-        if [ -d "$cpu_base_path/$cpu/" ]; then
-          log_msg 3 "Resetting $cpu"
-          echo "${lp_default_govs[$cpu]}" > "$cpu_base_path/$cpu/cpufreq/scaling_governor"
+
+        # Enable high-power cores (previously disabled)
+        if [ "$disable_cores" = "auto" ]; then
+            for cpu in "${hp_cpus[@]}"; do
+                log_msg 3 "Enabling $cpu"
+                echo "1" > "$cpu_base_path/$cpu/online"
+            done
+        else
+            for cpu in $disable_cores; do
+                if [ -d "$cpu_base_path/$cpu" ]; then
+                    log_msg 3 "Enabling $cpu"
+                    echo "1" > "$cpu_base_path/$cpu/online"
+                fi
+            done
         fi
-      done
-    fi
-    if [ -d "/data/adb/modules" ]; then
-      # magisk mount read-only
-      magic_remount_ro &>/dev/null
-    fi
-  fi
 
-  # Handle Doze
-  if [ "$doze" != "false" ]; then
-    log_msg 3 "Disabling Doze mode"
-    dumpsys deviceidle unforce &>/dev/null
-  fi
+        # Reset low-power cores' governors to defaults
+        if [ "$handle_cores" = "auto" ]; then
+            for index in "${!lp_cpus[@]}"; do
+                local cpu="${lp_cpus[$index]}"
+                local gov="${lp_govs[$index]}"
+                log_msg 3 "Resetting $cpu governor to $gov"
+                echo "$gov" > "$cpu_base_path/$cpu/cpufreq/scaling_governor"
+            done
+        else
+            for cpu in $handle_cores; do
+                if [ -d "$cpu_base_path/$cpu" ]; then
+                    local gov="${lp_default_govs[$cpu]}"
+                    log_msg 3 "Resetting $cpu governor to $gov"
+                    echo "$gov" > "$cpu_base_path/$cpu/cpufreq/scaling_governor"
+                fi
+            done
+        fi
 
-  # Handle WiFi
-  if [ "$kill_wifi" = "true" ]; then
-    log_msg 3 "Enabling WiFi"
-    if [ -n "$RFKILL_CMD" ]; then
-      log_msg 3 "Attempting to unblock with: $RFKILL_CMD"
-      "$RFKILL_CMD" unblock wifi
-      
-      # Check if rfkill actually worked, if not, use svc as a final fallback
-      if [ "$("$RFKILL_CMD" list wifi | grep Soft | cut -d: -f2 | cut -d' ' -f2)" != "no" ]; then
-         log_msg 3 "rfkill failed to unblock. Falling back to svc."
-         svc wifi enable
-      fi
-    else
-      log_msg 3 "No rfkill command available. Using svc."
-      svc wifi enable
+        if [ -d "/data/adb/modules" ]; then
+            magic_remount_ro &>/dev/null
+        fi
     fi
-  fi
 
-  # Handle Apps
-  if [ "$handle_apps" != "false" ]; then
-    for app in $(pm list packages -3 | cut -d: -f2- && [ -s "$denylist" ] && cat "$denylist"); do
-      if grep -q -E "$app" "$allowlist"; then
-        continue
-      fi
-      if [ "$handle_apps" = "nice" ]; then
-        for i in $(pgrep "$app"); do
-          log_msg 3 "Resetting the nice level for $app"
-          renice -n 0 "$i" &>/dev/null &
+    # Disable Doze mode if enabled
+    if [ "$doze" != "false" ]; then
+        log_msg 3 "Disabling Doze mode"
+        dumpsys deviceidle unforce &>/dev/null
+    fi
+
+    # Handle Wi-Fi: enable if previously disabled
+    if [ "$kill_wifi" = "true" ]; then
+        log_msg 3 "Enabling WiFi"
+        if [ -n "$RFKILL_CMD" ]; then
+            log_msg 3 "Attempting to unblock with: $RFKILL_CMD"
+            "$RFKILL_CMD" unblock wifi
+            # Check if rfkill worked, fallback to svc
+            if [ "$("$RFKILL_CMD" list wifi | grep Soft | cut -d: -f2 | cut -d' ' -f2)" != "no" ]; then
+                log_msg 3 "rfkill failed to unblock. Falling back to svc."
+                svc wifi enable
+            fi
+        else
+            log_msg 3 "No rfkill command available. Using svc."
+            svc wifi enable
+        fi
+    fi
+
+    # Handle Apps: unsuspend or renice if configured
+    if [ "$handle_apps" != "false" ]; then
+        for app in $(pm list packages -3 | cut -d: -f2-; [ -s "$denylist" ] && cat "$denylist"); do
+            if grep -q -E "$app" "$allowlist"; then
+                continue
+            fi
+
+            if [ "$handle_apps" = "nice" ]; then
+                for pid in $(pgrep "$app"); do
+                    log_msg 3 "Resetting nice level for $app PID $pid"
+                    renice -n 0 "$pid" &>/dev/null &
+                done
+            else
+                log_msg 3 "Unsuspending $app"
+                pm unsuspend "$app" &>/dev/null &
+            fi
         done
-      else
-        log_msg 3 "Unsuspending $app"
-        pm unsuspend "$app" &>/dev/null &
-      fi
-    done
-  fi
+    fi
 
-  # Handle GMS
-  if [ "$handle_gms" = "nice" ]; then
-    log_msg 3 "Resetting the nice level for GMS"
-    renice -n 0 "$(pgrep com.google.android.gms)"
-  elif [ "$handle_gms" = "kill" ]; then
-    log_msg 3 "Enabling GMS"
-    pm enable com.google.android.gms
-  else
-    : # Do nothing
-  fi
-  # Handle Processes
-  if [ "$handle_proc" = "true" ]; then
-    while read proc nice; do
-      log_msg 3 "Resetting the nice level for $proc"
-      renice -n 0 "$(pgrep $proc)"
-    done < "$proc_file"
-  fi
-  # Low RAM
-  if [ "$low_ram" = "true" ]; then
-    log_msg 3 "Setting low_ram to false"
-    resetprop -n ro.config.low_ram false
-  fi
+    # Handle Google Mobile Services reset
+    if [ "$handle_gms" = "nice" ]; then
+        log_msg 3 "Resetting nice level for GMS"
+        renice -n 0 "$(pgrep com.google.android.gms)" &>/dev/null
+    elif [ "$handle_gms" = "kill" ]; then
+        log_msg 3 "Enabling GMS"
+        pm enable com.google.android.gms
+    fi
 
-  if [ "$version" != "2" ]; then
-    lock="0"
-    echo " - [done]"
-    notif "status: Disabled"
-    log_msg 1 "Disabled XtremeBS"
-  fi
+    # Handle process niceness reset
+    if [ "$handle_proc" = "true" ]; then
+        while read proc nice; do
+            log_msg 3 "Resetting nice level for $proc"
+            renice -n 0 "$(pgrep $proc)"
+        done < "$proc_file"
+    fi
 
-  update_status
+    # Clear low RAM flag if set
+    if [ "$low_ram" = "true" ]; then
+        log_msg 3 "Clearing low_ram flag"
+        resetprop -n ro.config.low_ram false
+    fi
+
+    if [ "$version" != "2" ]; then
+        lock="0"
+        echo " - [done]"
+        notif "status: Disabled"
+        log_msg 1 "Disabled XtremeBS"
+    fi
+
+    update_status
 }
+
 
 # Event stuff for V2
 
