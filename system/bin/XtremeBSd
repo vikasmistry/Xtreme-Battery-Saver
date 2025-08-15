@@ -449,146 +449,150 @@ read_config() {
 
 
 
-# Action stuff
-
+# Enable all configured power saving features
 enable_pwr_save() {
-  if [ "$version" != "2" ]; then
-    lock="1"
-    echo -n "Enabling XtremeBS"
-    notif "Enabling XtremeBS..."
-    log_msg 1 "Enabling XtremeBS"
-  fi
-  # Handle Apps
-  if [ "$handle_apps" != "false" ]; then
-    for app in $(pm list packages -3 | cut -d: -f2- && [ -s "$denylist" ] && cat "$denylist"); do
-      if grep -q -E "$app" "$allowlist"; then
-        continue
-      fi
-      if [ "$handle_apps" = "nice" ]; then
-        for i in $(pgrep "$app"); do
-          log_msg 3 "Renicing $i"
-          renice -n 19 "$i" &>/dev/null &
+    if [ "$version" != "2" ]; then
+        lock="1"
+        echo -n "Enabling XtremeBS"
+        notif "Enabling XtremeBS..."
+        log_msg 1 "Enabling XtremeBS"
+    fi
+
+    # App handling: kill/nice/suspend if configured
+    if [ "$handle_apps" != "false" ]; then
+        local app
+        # Get all user apps, plus any denylisted system apps
+        for app in $(pm list packages -3 | cut -d: -f2-; [ -s "$denylist" ] && cat "$denylist"); do
+            # Skip allowlisted apps
+            if grep -q -E "$app" "$allowlist"; then
+                continue
+            fi
+            if [ "$handle_apps" = "nice" ]; then
+                for pid in $(pgrep "$app"); do
+                    log_msg 3 "Renicing $pid"
+                    renice -n 19 "$pid" &>/dev/null &
+                done
+            elif [ "$handle_apps" = "kill" ]; then
+                log_msg 3 "Stopping $app"
+                am force-stop "$app" &>/dev/null &
+            else  # suspend
+                log_msg 3 "Suspending $app"
+                am force-stop "$app" &>/dev/null &
+                pm suspend "$app" &>/dev/null &
+            fi
         done
-      elif [ "$handle_apps" = "kill" ]; then
-        log_msg 3 "Stopping $app"
-        am force-stop "$app" &>/dev/null &
-      else
-        log_msg 3 "Suspending $app"
-        am force-stop "$app" &>/dev/null &
-        pm suspend "$app" &>/dev/null &
-      fi
-    done
-  fi
+    fi
 
-  # Handle GMS , this will be leaving soon.
-  # Not many need it, and proc_file can handle it
-  if [ "$handle_gms" = "nice" ]; then
-    log_msg 3 "Renicing GMS"
-    renice -n 19 "$(pgrep com.google.android.gms)"
-  elif [ "$handle_gms" = "kill" ]; then
-    log_msg 3 "Disabling GMS"
-    pm disable com.google.android.gms
-    am force-stop com.google.android.gms
-  else
-    : # Do nothing
-  fi
-  # Handle processes
-  if [ "$handle_proc" = "true" ]; then
-    while [ "$lock" = "1" ]; do
-      while read proc nice; do
-        pid="$(pgrep $proc)"
-        [ ! "$nice" ] && nice="10"
-        if [ "$(cat /proc/$pid/stat | cut -d' ' -f19)" != "$nice" ]; then
-          log_msg 3 "Renicing $proc to $nice"
-          renice -n "$nice" "$pid"
+    # Special handling for Google Play Services, if requested
+    if [ "$handle_gms" = "nice" ]; then
+        log_msg 3 "Renicing GMS"
+        renice -n 19 "$(pgrep com.google.android.gms)" &>/dev/null
+    elif [ "$handle_gms" = "kill" ]; then
+        log_msg 3 "Disabling GMS"
+        pm disable com.google.android.gms
+        am force-stop com.google.android.gms
+    fi
+
+    # Per-process handling (from file)
+    if [ "$handle_proc" = "true" ]; then
+        # Handles in a background loop while locked
+        while [ "$lock" = "1" ]; do
+            while read proc nice; do
+                local pid
+                pid="$(pgrep $proc)"
+                [ -z "$nice" ] && nice="10"
+                if [ "$(cat /proc/$pid/stat | cut -d' ' -f19 2>/dev/null)" != "$nice" ]; then
+                    log_msg 3 "Renicing $proc to $nice"
+                    renice -n "$nice" "$pid"
+                fi
+            done < "$proc_file"
+            sleep "$delay"
+        done &
+    fi
+
+    # Enable low RAM flag if configured
+    if [ "$low_ram" = "true" ]; then
+        log_msg 3 "Setting the low_ram flag"
+        resetprop -n ro.config.low_ram true
+    fi
+
+    # Wi-Fi: disable if configured, using rfkill or svc as fallback
+    if [ "$kill_wifi" = "true" ]; then
+        log_msg 3 "Disabling WiFi"
+        if [ -n "$RFKILL_CMD" ]; then
+            log_msg 3 "Attempting to block with: $RFKILL_CMD"
+            "$RFKILL_CMD" block wifi
+            # Fallback to svc if rfkill fails
+            if [ "$("$RFKILL_CMD" list wifi | grep Soft | cut -d: -f2 | cut -d' ' -f2)" != "yes" ]; then
+                log_msg 3 "rfkill failed to block. Falling back to svc."
+                svc wifi disable
+            fi
+        else
+            log_msg 3 "No rfkill command available. Using svc."
+            svc wifi disable
         fi
-      done < "$proc_file"
-      sleep "$delay"
-    done &
-  fi
-  # Low RAM
-  if [ "$low_ram" = "true" ]; then
-    log_msg 3 "Setting the low_ram flag"
-    resetprop -n ro.config.low_ram true
-  fi
-
-  # Handle WiFi
-  if [ "$kill_wifi" = "true" ]; then
-    log_msg 3 "Disabling WiFi"
-    if [ -n "$RFKILL_CMD" ]; then
-      log_msg 3 "Attempting to block with: $RFKILL_CMD"
-      "$RFKILL_CMD" block wifi
-      
-      # Check if rfkill actually worked, if not, use svc as a final fallback
-      if [ "$("$RFKILL_CMD" list wifi | grep Soft | cut -d: -f2 | cut -d' ' -f2)" != "yes" ]; then
-         log_msg 3 "rfkill failed to block. Falling back to svc."
-         svc wifi disable
-      fi
-    else
-      log_msg 3 "No rfkill command available. Using svc."
-      svc wifi disable
     fi
-  fi
 
-  # Handle Doze
-  if [ "$doze" = "light" ]; then
-    log_msg 3 "Enabling $doze Doze mode"
-    dumpsys deviceidle force-idle light &>/dev/null
-  fi
-  if [ "$doze" = "deep" ]; then
-    log_msg 3 "Enabling $doze Doze mode"
-    dumpsys deviceidle force-idle deep &>/dev/null
-  fi
-
-  # Handle Cores
-
-  if [ "$handle_cores" != "false" ] || [ "$disable_cores" != "false" ]; then
-    if [ -d "/data/adb/modules" ]; then
-      # magisk mount read-write
-      magic_remount_rw &>/dev/null
+    # Doze mode: light or deep
+    if [ "$doze" = "light" ]; then
+        log_msg 3 "Enabling light Doze mode"
+        dumpsys deviceidle force-idle light &>/dev/null
+    elif [ "$doze" = "deep" ]; then
+        log_msg 3 "Enabling deep Doze mode"
+        dumpsys deviceidle force-idle deep &>/dev/null
     fi
-    if [ "$disable_cores" = "auto" ]; then
-      for cpu in ${hp_cpus[@]}; do
-        log_msg 3 "Disabling $cpu"
-        echo "0" > "$cpu_base_path/$cpu/online"
-      done
-    else
-      # manual
-      for core in $disable_cores; do
-        if [ -d "$cpu_base_path/$core" ]; then
-          log_msg 3 "Disabling $core"
-          echo "0" > "$cpu_base_path/$core/online"
+
+    # Core adjustments (power/performance clusters)
+    if [ "$handle_cores" != "false" ] || [ "$disable_cores" != "false" ]; then
+        if [ -d "/data/adb/modules" ]; then
+            magic_remount_rw &>/dev/null
         fi
-      done
-    fi
-    if [ "$handle_cores" = "auto" ]; then
-      for cpu in ${lp_cpus[@]}; do
-        log_msg 3 "Setting powersave on $cpu"
-        echo "powersave" > "$cpu_base_path/$cpu/cpufreq/scaling_governor"
-      done
-    else
-      # manual
-      for core in $handle_cores; do
-        [ -d "$cpu_base_path/$core/" ] && \
-        grep -q " powersave " "$cpu_base_path/$core/cpufreq/scaling_available_governors" && \
-        log_msg 3 "Setting powersave on $core" && \
-        echo "powersave" > "$cpu_base_path/$cpu/cpufreq/scaling_governor"
-      done
-    fi
-    if [ -d "/data/adb/modules" ]; then
-      # magisk mount read-only
-      magic_remount_ro &>/dev/null
-    fi
-  fi
 
-  if [ "$version" != "2" ]; then
-    echo " - [done]"
-    notif "status: Enabled"
-    log_msg 1 "Enabled XtremeBS"
-  fi
+        # Disable high-power cores
+        if [ "$disable_cores" = "auto" ]; then
+            for cpu in ${hp_cpus[@]}; do
+                log_msg 3 "Disabling $cpu"
+                echo "0" > "$cpu_base_path/$cpu/online"
+            done
+        else
+            for core in $disable_cores; do
+                if [ -d "$cpu_base_path/$core" ]; then
+                    log_msg 3 "Disabling $core"
+                    echo "0" > "$cpu_base_path/$core/online"
+                fi
+            done
+        fi
 
-  update_status
+        # Set low-power cores to powersave
+        if [ "$handle_cores" = "auto" ]; then
+            for cpu in ${lp_cpus[@]}; do
+                log_msg 3 "Setting powersave on $cpu"
+                echo "powersave" > "$cpu_base_path/$cpu/cpufreq/scaling_governor"
+            done
+        else
+            for core in $handle_cores; do
+                if [ -d "$cpu_base_path/$core/" ] && \
+                   grep -q " powersave " "$cpu_base_path/$core/cpufreq/scaling_available_governors"; then
+                    log_msg 3 "Setting powersave on $core"
+                    echo "powersave" > "$cpu_base_path/$core/cpufreq/scaling_governor"
+                fi
+            done
+        fi
+
+        if [ -d "/data/adb/modules" ]; then
+            magic_remount_ro &>/dev/null
+        fi
+    fi
+
+    if [ "$version" != "2" ]; then
+        echo " - [done]"
+        notif "status: Enabled"
+        log_msg 1 "Enabled XtremeBS"
+    fi
+
+    update_status
 }
+
 
 disable_pwr_save() {
   if [ "$version" != "2" ]; then
