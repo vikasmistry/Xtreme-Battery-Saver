@@ -406,78 +406,47 @@ update_status() {
 }
 
 
-# V1 read_config
+# Read and parse v1 configuration file, setting script variables accordingly
 read_config() {
-  # Read config
-  # delay in seconds
-  delay=$(getconf delay 3)
+    # Read basic configurations with defaults
+    delay=$(getconf delay 3)
+    trigger=$(getconf trigger "")
 
-  # trigger
-  # auto|boot # <integer>
-  trigger=$(getconf trigger "")
-  [ -z "$trigger" ] && exit
+    if [ -z "$trigger" ]; then
+        log_msg 1 "Error: 'trigger' key missing in config. Exiting."
+        exit 1
+    fi
 
-  # Keep state on charge
-  # true|false
-  keep_on_charge=$(getconf keep_on_charge true)
+    keep_on_charge=$(getconf keep_on_charge true)
+    handle_apps=$(getconf handle_apps false)
+    allowlist=$(getconf allowlist "/data/local/tmp/XtremeBS/apps.allow")
+    denylist=$(getconf denylist "/data/local/tmp/XtremeBS/apps.deny")
+    handle_cores=$(getconf handle_cores "false")
+    disable_cores=$(getconf disable_cores "false")
+    handle_gms=$(getconf handle_gms false)
+    handle_proc=$(getconf handle_proc false)
+    proc_file=$(getconf proc_file "/data/local/tmp/XtremeBS/proc.list")
+    low_ram=$(getconf low_ram false)
+    doze=$(getconf doze false)
+    kill_wifi=$(getconf kill_wifi false)
 
-  # handle_apps
-  # false|kill|nice|suspend
-  handle_apps=$(getconf handle_apps false)
+    # Sanity check: If suspending apps without a valid allowlist, disable suspension to avoid issues
+    if [ "$handle_apps" = "suspend" ] && [ ! -s "$allowlist" ]; then
+        notif "Alert!\nYou MUST have an allowlist!\nWill not suspend apps without one!"
+        log_msg 1 "Allowlist missing or empty; disabling app suspension"
+        handle_apps="false"
+    fi
 
-  # allowlist (user apps)
-  # a path /data/local/tmp/XtremeBS/apps.allow
-  allowlist=$(getconf "allowlist" "/data/local/tmp/XtremeBS/apps.allow")
+    # If proc_file is missing/deliberately empty, disable proc handling
+    if [ "$handle_proc" != "false" ] && [ ! -s "$proc_file" ]; then
+        handle_proc="false"
+        log_msg 2 "Proc file missing/empty, disabling proc handling"
+    fi
 
-  # sanity check. Not allow user to suspend
-  # everything without an allowlist. Will make
-  # all apps unusable. Set handle_apps=false
-  # and notify user
-  [ ! -s "$allowlist" ] && [ "$handle_apps" = "suspend" ] && handle_apps="false" && notif "Alert!\nYou MUST have an allowlist!\nWill not suspend apps without one!"
-  # log error here
-
-  # denylist (system apps)
-  # a path /data/local/tmp/XtremeBS/apps.deny
-  denylist=$(getconf "denylist" "/data/local/tmp/XtremeBS/apps.deny")
-
-  # handle_cores
-  # auto|false|"cpu4 cpu5"
-  handle_cores=$(getconf "handle_cores" "false")
-
-  # disable_cores
-  # false|auto|"cpu6 cpu7"
-  disable_cores=$(getconf "disable_cores" "false")
-
-  # handle_gms
-  # false|kill|nice
-  handle_gms=$(getconf "handle_gms" false)
-
-  # handle_proc
-  # true|false
-  handle_proc=$(getconf "handle_proc" false)
-
-  # proc_file
-  # a path /data/local/tmp/XtremeBS/proc.list
-  proc_file=$(getconf "proc_file" "/data/local/tmp/XtremeBS/proc.list")
-  [ ! -s "$proc_file" ] && handle_proc="false"
-
-  # set low_ram
-  # true|false
-  low_ram=$(getconf "low_ram" false)
-
-  # set doze
-  # false|light|deep
-  doze=$(getconf doze false)
-
-  # kill_wifi
-  # true|false
-  kill_wifi=$(getconf kill_wifi false)
-
-  # May need this later
-#  percent="$(dumpsys battery | grep level | cut -d' ' -f4)"
-
-  notif "Config Loaded"
+    notif "Config Loaded"
+    log_msg 2 "Config loaded successfully"
 }
+
 
 
 # Action stuff
