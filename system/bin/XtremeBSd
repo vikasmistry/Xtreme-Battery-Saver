@@ -112,19 +112,41 @@ notif() {
 }
 
 
+# Log a message to the log file at a specific log level.
+# Usage: log_msg <level: 1|2|3> <message>
+# Levels: 1=INFO, 2=VERBOSE, 3=DEBUG
 log_msg() {
-  case $1 in
-    1)
-      log_lvl="[INFO]" ;;
-    2)
-      log_lvl="[VERBOSE]" ;;
-    3)
-      log_lvl="[DEBUG]" ;;
-  esac
-  if [ "$log_level" -ge "$1" ]; then
-    echo "$(date +"%m-%d-%Y %H:%M:%S") $log_lvl $2" >> "$log_file"
-  fi
+    local level="$1"
+    local message="$2"
+    local level_tag
+
+    # Level tags
+    case "$level" in
+        1) level_tag="[INFO]" ;;
+        2) level_tag="[VERBOSE]" ;;
+        3) level_tag="[DEBUG]" ;;
+        *)
+            echo "ERROR: Invalid log level: $level (must be 1, 2, or 3)" >&2
+            return 1
+            ;;
+    esac
+
+    # Validate globals
+    if [ -z "$log_file" ]; then
+        echo "ERROR: log_file is not set!" >&2
+        return 2
+    fi
+    if [ -z "$log_level" ]; then
+        # Default to INFO if not set
+        log_level=1
+    fi
+
+    # Only log at or above configured log_level
+    if [ "$log_level" -ge "$level" ]; then
+        printf "%s %s %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$level_tag" "${message:-}" >> "$log_file"
+    fi
 }
+
 
 migrate() {
   log_msg 2 "It looks like version=2 was found in the config without a valid event block"
