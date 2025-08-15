@@ -337,57 +337,74 @@ find_rfkill_command() {
 }
 
 
+# Write current hardware status to a status file for external use/monitoring
 update_status() {
-  status_file="/data/local/tmp/XtremeBS/XtremeBS.status"
-  echo -n > "$status_file"
-  # CPU Map
-  for i in ${!cpus[@]}; do
-    core="${cpus[$i]}"
-    core_list+=( "$core" )
-    #is it in powersave
-    core="${core_list[$i]}"
-    if [ "$(cat $cpu_base_path/$core/cpufreq/scaling_governor)" = "powersave" ]; then
-      tmp_var="powersave"
+    local status_file="/data/local/tmp/XtremeBS/XtremeBS.status"
+    : > "$status_file"  # Truncate or create file
+
+    # Defensive resets
+    local -a core_list=()
+    local -a core_status=()
+    local core tmp_status
+
+    # CPU Map: state per core
+    for i in "${!cpus[@]}"; do
+        core="${cpus[$i]}"
+        core_list+=("$core")
+
+        tmp_status="online"
+        if [ -f "$cpu_base_path/$core/cpufreq/scaling_governor" ] && \
+           [ "$(cat "$cpu_base_path/$core/cpufreq/scaling_governor" 2>/dev/null)" = "powersave" ]; then
+            tmp_status="powersave"
+        fi
+        if [ -f "$cpu_base_path/$core/online" ] && \
+           [ "$(cat "$cpu_base_path/$core/online" 2>/dev/null)" = "0" ]; then
+            tmp_status="offline"
+        fi
+        core_status+=("$tmp_status")
+    done
+
+    # Wifi state
+    local wifi="unknown"
+    if [ -n "$RFKILL_CMD" ]; then
+        wifi=$($RFKILL_CMD list wifi 2>/dev/null | grep "Soft" | awk '{print $NF}')
+        if [ "$wifi" = "yes" ]; then
+            wifi="disabled"
+        elif [ "$wifi" = "no" ]; then
+            wifi="enabled"
+        else
+            wifi="unknown"
+        fi
+    else
+        # Fallback: check by svc, not 100% reliable but better than nothing
+        wifi_status="$(dumpsys wifi | grep 'Wi-Fi is ' | awk '{print $3}')"
+        wifi="${wifi_status:-unknown}"
     fi
-    # is it disabled
-    if [ "$(cat $cpu_base_path/$core/online)" = "0" ]; then
-      tmp_var="offline"
+
+    # Doze mode status
+    local doze="inactive"
+    local light deep
+    light="$(dumpsys deviceidle get light 2>/dev/null)"
+    deep="$(dumpsys deviceidle get deep 2>/dev/null)"
+    if [ "$light" = "IDLE" ]; then
+        doze="light"
+    elif [ "$deep" = "IDLE" ]; then
+        doze="deep"
     fi
-    core_status+=( "${tmp_var:-online}" )
-    unset tmp_var
-  done
 
-  # wifi
-  if [ -n "$RFKILL_CMD" ]; then
-    wifi=$($RFKILL_CMD list wifi | grep "Soft" | cut -d' ' -f3)
-  fi
-  if [ "$wifi" = "yes" ]; then
-    wifi="disabled"
-  else
-    wifi="enabled"
-  fi
+    # Write per-core status
+    for i in "${!core_list[@]}"; do
+        echo "${core_list[$i]}: ${core_status[$i]}" >> "$status_file"
+    done
 
-  # Doze
-  unset doze
-  light="$(dumpsys deviceidle get light)"
-  deep="$(dumpsys deviceidle get deep)"
-  if [ "$light" = "IDLE" ]; then
-    doze="light"
-  elif [ "$deep" = "IDLE" ]; then
-    doze="deep"
-  else
-    doze="inactive"
-  fi
-
-  for i in ${!core_list[@]}; do
-    echo "${core_list[$i]}: ${core_status[$i]}" >> "$status_file"
-  done
-  unset core_list core_status
-  echo "Low RAM: $(getprop ro.config.low_ram)" >> "$status_file"
-  echo "WiFi: $wifi" >> "$status_file"
-  echo "Doze: $doze" >> "$status_file"
-  unset doze wifi
+    # Write system-wide info
+    local ram_state
+    ram_state=$(getprop ro.config.low_ram 2>/dev/null)
+    echo "Low RAM: ${ram_state:-unknown}" >> "$status_file"
+    echo "WiFi: $wifi" >> "$status_file"
+    echo "Doze: $doze" >> "$status_file"
 }
+
 
 # V1 read_config
 read_config() {
