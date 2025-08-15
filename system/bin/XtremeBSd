@@ -291,25 +291,51 @@ auto_map_cores() {
 }
 
 
+# Search available binaries for working rfkill command, set global RFKILL_CMD accordingly
 find_rfkill_command() {
-  log_msg 2 "Searching for a valid rfkill command..."
-  if command -v rfkill >/dev/null 2>&1; then
-    RFKILL_CMD="rfkill"
-  elif command -v toybox >/dev/null 2>&1 && toybox --help | grep -q rfkill; then
-    RFKILL_CMD="toybox rfkill"
-  else
-    local busybox_path="$(find /data/adb/ -type f -name busybox)"
-    if [ -f "$busybox_path" ] && "$busybox_path" --help | grep -q rfkill; then
-      RFKILL_CMD="$busybox_path rfkill"
-    fi
-  fi
+    log_msg 2 "Searching for a valid rfkill command..."
 
-  if [ -n "$RFKILL_CMD" ]; then
-    log_msg 2 "Found rfkill command: $RFKILL_CMD"
-  else
-    log_msg 2 "No rfkill command found. Will rely on svc for WiFi control."
-  fi
+    RFKILL_CMD=""
+
+    # List of commands to try
+    local tries=(
+        "rfkill"
+        "toybox rfkill"
+    )
+
+    # Try searching for busybox in a few common places
+    local locations=("/data/adb" "/system/xbin" "/system/bin" "/vendor/bin")
+    for dir in "${locations[@]}"; do
+        # Prefer files actually named "busybox"
+        local busybox
+        while IFS= read -r busybox; do
+            if [ -f "$busybox" ] && "$busybox" --help 2>/dev/null | grep -q rfkill; then
+                tries+=("$busybox rfkill")
+            fi
+        done < <(find "$dir" -type f -name busybox 2>/dev/null)
+    done
+
+    # Try each possible rfkill command
+    for rftry in "${tries[@]}"; do
+        local cmd="${rftry%% *}"
+        local arg="${rftry#* }"
+        # Check if binary exists (for toybox/busybox cases)
+        if command -v "$cmd" >/dev/null 2>&1; then
+            # For ordinary rfkill, just set; for 'toybox rfkill' or 'busybox rfkill', need --help check
+            if [ "$cmd" = "rfkill" ] || ($cmd --help 2>/dev/null | grep -q rfkill); then
+                RFKILL_CMD="$rftry"
+                break
+            fi
+        fi
+    done
+
+    if [ -n "$RFKILL_CMD" ]; then
+        log_msg 2 "Found rfkill command: $RFKILL_CMD"
+    else
+        log_msg 2 "No rfkill command found. Will rely on svc for WiFi control."
+    fi
 }
+
 
 update_status() {
   status_file="/data/local/tmp/XtremeBS/XtremeBS.status"
