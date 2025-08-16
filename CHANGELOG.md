@@ -1,4 +1,11 @@
 
+### v2.1.4.2508161801-beta
+  - Enhanced core functions with comprehensive error handling
+  - Added security improvements with fixed string matching
+  - Improved input validation across all functions
+  - Added detailed function documentation
+  - Better variable scoping and return codes
+
 ### v2.1.4
   - Improve Wifi handling - Authored by [vikasmistry](https://github.com/vikasmistry)
 
